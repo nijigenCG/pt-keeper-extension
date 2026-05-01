@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "PT Keeper",
+  "version": "1.0",
+  "description": "一键读取 PT 站点 Cookie / Token，支持 PT-Keeper Docker 服务自动保活",
+  "permissions": [
+    "cookies",
+    "storage",
+    "tabs",
+    "notifications",
+    "scripting",
+    "activeTab",
+    "webRequest",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://pthome.net/*",
+    "https://hdarea.club/*",
+    "https://pterclub.net/*",
+    "https://hdhome.org/*",
+    "https://pt.btschool.club/*",
+    "https://hdtime.org/*",
+    "https://kp.m-team.cc/*",
+    "https://api.m-team.io/*",
+    "https://www.hddolby.com/*",
+    "https://www.skyey2.com/*",
+    "https://u2.dmhy.org/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

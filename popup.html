@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 420px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; }
+    .header { background: #16213e; padding: 16px; border-bottom: 1px solid #0f3460; }
+    .header h1 { font-size: 18px; color: #e94560; }
+    .header p { font-size: 12px; color: #888; margin-top: 4px; }
+    .content { padding: 12px; }
+    .btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: #e94560; color: #fff; }
+    .btn-primary:hover { background: #c73650; }
+    .btn-primary:disabled { background: #555; cursor: not-allowed; }
+    .btn-secondary { background: #0f3460; color: #eee; margin-top: 8px; }
+    .btn-secondary:hover { background: #1a4a80; }
+    .btn-visit { background: #16213e; color: #0f8; font-size: 13px; padding: 10px; margin-top: 8px; }
+    .btn-visit:hover { background: #1e3050; }
+    .status { margin: 12px 0; }
+    .site-row { display: flex; align-items: center; padding: 8px 10px; border-radius: 6px; margin-bottom: 6px; background: #16213e; gap: 10px; }
+    .site-row.success { border-left: 3px solid #0f8; }
+    .site-row.fail { border-left: 3px solid #f44; }
+    .site-row.pending { border-left: 3px solid #fa0; }
+    .site-row.inactive { border-left: 3px solid #555; }
+    .site-name { flex: 1; font-size: 13px; font-weight: 500; }
+    .site-status { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+    .site-row.success .site-status { background: #0f8; color: #000; }
+    .site-row.fail .site-status { background: #f44; color: #fff; }
+    .site-row.pending .site-status { background: #fa0; color: #000; }
+    .site-row.inactive .site-status { background: #555; color: #aaa; }
+    .log { background: #0d0d1a; border-radius: 6px; padding: 10px; margin-top: 12px; max-height: 120px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 11px; color: #888; }
+    .log-line { margin-bottom: 2px; }
+    .log-line.ok { color: #0f8; }
+    .log-line.err { color: #f44; }
+    .log-line.info { color: #4af; }
+    .footer { padding: 10px 12px; border-top: 1px solid #0f3460; font-size: 11px; color: #555; text-align: center; }
+    .divider { border-top: 1px solid #0f3460; margin: 12px 0; }
+    .export-section { margin-top: 12px; }
+    .export-note { font-size: 11px; color: #666; margin-top: 4px; line-height: 1.4; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>PT Keeper</h1>
+    <p>一键读取 / 刷新 PT 站点认证信息</p>
+  </div>
+  <div class="content">
+    <button class="btn btn-primary" id="btnRefresh">
+      <span id="btnIcon"></span>
+      <span id="btnText">读取所有站点 Cookie</span>
+    </button>
+    <button class="btn btn-visit" id="btnVisit">访问所有站点（保活）</button>
+    <div class="divider"></div>
+    <div class="status" id="statusArea"></div>
+    <div class="log" id="logArea" style="display:none"></div>
+    <div class="export-section">
+      <button class="btn btn-secondary" id="btnExport">导出 Cookie 文件 (JSON)</button>
+      <p class="export-note">导出后可复制到 <code>pt-keeper/config/cookies/</code> 目录使用</p>
+    </div>
+  </div>
+  <div class="footer">PT Keeper v1.0</div>
+  <script src="popup.js"></script>
+</body>
+</html>
