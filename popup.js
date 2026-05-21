@@ -77,7 +77,7 @@ async function refreshAll() {
 
   // 1. 读取普通 Cookie
   for (const site of SITES.filter(s => s.authType !== 'mteam_api')) {
-    const result = { name: site.name, status: 'pending' };
+    const result = { name: site.name, file: site.file, status: 'pending' };
     renderStatus([...results, ...SITES.filter(s => s.authType === 'mteam_api').map(s => ({ name: s.name, status: 'pending' }))]);
     const placeholder = SITES.filter(s => s.authType === 'mteam_api').map(s => ({ name: s.name, status: 'pending' }));
     renderStatus([...results.map(r => ({...r, status: r.data ? 'success' : 'inactive'})), result, ...placeholder]);
@@ -106,7 +106,7 @@ async function refreshAll() {
 
   // 2. 读取 M-Team Token（通过 background 拦截）
   for (const site of SITES.filter(s => s.authType === 'mteam_api')) {
-    const result = { name: site.name, status: 'pending' };
+    const result = { name: site.name, file: site.file, status: 'pending' };
     log(`${site.name}: 检查已捕获的头信息...`);
     const captured = await new Promise(r => chrome.runtime.sendMessage({ type: 'GET_CAPTURED_HEADERS' }, r));
 
@@ -204,7 +204,7 @@ async function exportJson() {
 
 btnRefresh.addEventListener('click', refreshAll);
 btnVisit.addEventListener('click', visitAll);
-btnExport.addEventListener('click', exportAll);
+btnExport.addEventListener('click', exportJson);
 
 // 加载时显示已保存状态 + 自动触发保活
 async function init() {
