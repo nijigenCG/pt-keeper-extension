@@ -5,6 +5,7 @@ const WINDOW_CHECK_ALARM = 'check-normal-window';
 const PENDING_AUTO_VISIT_RETRY_ALARM = 'pending-auto-visit-retry';
 const WINDOW_CHECK_PERIOD_MINUTES = 1;
 const PENDING_AUTO_VISIT_RETRY_DELAY_MINUTES = 0.1;
+const AUTO_VISIT_OPEN_RETRY_DELAYS_MS = [0, 1000, 3000];
 const AUTO_CLOSE_TAB_IDS_KEY = 'autoCloseTabIds';
 const LAST_AUTO_VISIT_AT_KEY = 'lastAutoVisitAt';
 const HAD_NORMAL_WINDOW_KEY = 'hadNormalWindow';
@@ -12,6 +13,8 @@ const PENDING_AUTO_VISIT_REASON_KEY = 'pendingAutoVisitReason';
 const AUTO_VISIT_DAILY_COUNTER_KEY = 'autoVisitDailyCounter';
 const AUTO_VISIT_DAILY_LIMIT_KEY = 'autoVisitDailyLimit';
 const DEFAULT_AUTO_VISIT_DAILY_LIMIT = 2;
+const CAPTURED_SITE_COOKIES_KEY = 'capturedSiteCookies';
+const AUTO_VISIT_SESSION_STARTED_KEY = 'autoVisitSessionStarted';
 
 const SITES = [
   { name: 'PTHome',   url: 'https://pthome.net/index.php' },
@@ -26,9 +29,30 @@ const SITES = [
   { name: 'M-Team',   url: 'https://kp.m-team.cc/index' },
 ];
 
+const SITE_HOST_TO_KEY = Object.fromEntries(
+  SITES.map(site => {
+    const host = new URL(site.url).hostname.toLowerCase();
+    return [host, host];
+  })
+);
+
 let capturedMTeamHeaders = null;
+let capturedSiteCookies = {};
 let autoVisitInProgress = false;
+let workerSessionAutoVisitStarted = false;
 const autoCloseTabIds = new Set();
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function runAsync(task, label) {
+  Promise.resolve()
+    .then(task)
+    .catch(error => {
+      console.warn(`[PT Keeper] ${label} failed: ${error?.message || error}`);
+    });
+}
 
 function getStorage(keys) {
   return new Promise(resolve => chrome.storage.local.get(keys, resolve));
@@ -38,20 +62,75 @@ function setStorage(items) {
   return new Promise(resolve => chrome.storage.local.set(items, resolve));
 }
 
+function getSessionStorage(keys) {
+  if (!chrome.storage.session) return Promise.resolve({});
+  return new Promise(resolve => {
+    chrome.storage.session.get(keys, result => {
+      if (chrome.runtime.lastError) {
+        resolve({});
+        return;
+      }
+      resolve(result || {});
+    });
+  });
+}
+
+function setSessionStorage(items) {
+  if (!chrome.storage.session) return Promise.resolve();
+  return new Promise(resolve => {
+    chrome.storage.session.set(items, () => {
+      chrome.runtime.lastError;
+      resolve();
+    });
+  });
+}
+
 function getNormalWindows() {
-  return new Promise(resolve => chrome.windows.getAll({ windowTypes: ['normal'] }, resolve));
+  return new Promise(resolve => {
+    chrome.windows.getAll({}, windows => {
+      if (chrome.runtime.lastError || !Array.isArray(windows)) {
+        resolve([]);
+        return;
+      }
+      resolve(windows.filter(window => window.type === 'normal'));
+    });
+  });
+}
+
+function ignoreChromePromise(maybePromise, label) {
+  if (maybePromise && typeof maybePromise.catch === 'function') {
+    maybePromise.catch(error => {
+      console.warn(`[PT Keeper] ${label} failed: ${error?.message || error}`);
+    });
+  }
+}
+
+function createAlarm(name, alarmInfo) {
+  try {
+    ignoreChromePromise(chrome.alarms.create(name, alarmInfo), `create alarm ${name}`);
+  } catch (error) {
+    console.warn(`[PT Keeper] create alarm ${name} failed: ${error?.message || error}`);
+  }
+}
+
+function clearAlarm(name) {
+  try {
+    ignoreChromePromise(chrome.alarms.clear(name), `clear alarm ${name}`);
+  } catch (error) {
+    console.warn(`[PT Keeper] clear alarm ${name} failed: ${error?.message || error}`);
+  }
 }
 
 function ensureWindowCheckAlarm() {
-  chrome.alarms.create(WINDOW_CHECK_ALARM, { periodInMinutes: WINDOW_CHECK_PERIOD_MINUTES });
+  createAlarm(WINDOW_CHECK_ALARM, { periodInMinutes: WINDOW_CHECK_PERIOD_MINUTES });
 }
 
 function schedulePendingAutoVisitRetry() {
-  chrome.alarms.create(PENDING_AUTO_VISIT_RETRY_ALARM, { delayInMinutes: PENDING_AUTO_VISIT_RETRY_DELAY_MINUTES });
+  createAlarm(PENDING_AUTO_VISIT_RETRY_ALARM, { delayInMinutes: PENDING_AUTO_VISIT_RETRY_DELAY_MINUTES });
 }
 
 function clearPendingAutoVisitRetry() {
-  chrome.alarms.clear(PENDING_AUTO_VISIT_RETRY_ALARM);
+  clearAlarm(PENDING_AUTO_VISIT_RETRY_ALARM);
 }
 
 function getBeijingDateKey(timestamp = Date.now()) {
@@ -116,6 +195,19 @@ function shouldCountAgainstDailyLimit(reason) {
   return reason !== 'installed';
 }
 
+async function hasSessionAutoVisitStarted() {
+  const { [AUTO_VISIT_SESSION_STARTED_KEY]: started = workerSessionAutoVisitStarted } = await getSessionStorage({
+    [AUTO_VISIT_SESSION_STARTED_KEY]: workerSessionAutoVisitStarted,
+  });
+  workerSessionAutoVisitStarted = Boolean(started);
+  return workerSessionAutoVisitStarted;
+}
+
+async function setSessionAutoVisitStarted(started) {
+  workerSessionAutoVisitStarted = Boolean(started);
+  await setSessionStorage({ [AUTO_VISIT_SESSION_STARTED_KEY]: workerSessionAutoVisitStarted });
+}
+
 async function setPendingAutoVisitReason(reason) {
   await setStorage({ [PENDING_AUTO_VISIT_REASON_KEY]: reason });
   schedulePendingAutoVisitRetry();
@@ -148,7 +240,7 @@ function closeKeepAliveTab(tabId) {
 
 function scheduleTabClose(tabId) {
   trackAutoCloseTab(tabId);
-  chrome.alarms.create(`${CLOSE_ALARM_PREFIX}${tabId}`, { delayInMinutes: 0.5 });
+  createAlarm(`${CLOSE_ALARM_PREFIX}${tabId}`, { delayInMinutes: 0.5 });
   chrome.tabs.get(tabId, tab => {
     if (chrome.runtime.lastError) return;
     if (tab?.status === 'complete') closeKeepAliveTab(tabId);
@@ -170,26 +262,27 @@ function openKeepAliveTab(windowId, site) {
 }
 
 async function visitAllSites(reason) {
-  const windows = await getNormalWindows();
-  const targetWindow = windows.find(window => window.focused) || windows[0];
-  if (!targetWindow?.id) {
-    await setPendingAutoVisitReason(reason);
-    return false;
+  for (const retryDelay of AUTO_VISIT_OPEN_RETRY_DELAYS_MS) {
+    if (retryDelay > 0) await delay(retryDelay);
+
+    const windows = await getNormalWindows();
+    const targetWindow = windows.find(window => window.focused) || windows[0];
+    if (!targetWindow?.id) continue;
+
+    console.log(`[PT Keeper] running keepalive visits: ${reason}`);
+    const results = await Promise.all(SITES.map(site => openKeepAliveTab(targetWindow.id, site)));
+    if (results.some(Boolean)) {
+      await clearPendingAutoVisitReason();
+      return true;
+    }
   }
 
-  console.log(`[PT Keeper] running keepalive visits: ${reason}`);
-  const results = await Promise.all(SITES.map(site => openKeepAliveTab(targetWindow.id, site)));
-  if (!results.some(Boolean)) {
-    await setPendingAutoVisitReason(reason);
-    return false;
-  }
-
-  await clearPendingAutoVisitReason();
-  return true;
+  await setPendingAutoVisitReason(reason);
+  return false;
 }
 
 async function runAutoVisit(reason) {
-  if (autoVisitInProgress) return;
+  if (autoVisitInProgress) return false;
   autoVisitInProgress = true;
 
   try {
@@ -202,25 +295,27 @@ async function runAutoVisit(reason) {
       dailyLimit = await getAutoVisitDailyLimit();
       if (dailyCounter.count >= dailyLimit) {
         console.log(`[PT Keeper] skipped keepalive visits for ${reason}: daily limit reached (${dailyCounter.count}/${dailyLimit})`);
-        return;
+        return true;
       }
     }
 
     const now = Date.now();
     const { [LAST_AUTO_VISIT_AT_KEY]: lastAutoVisitAt = 0 } = await getStorage({ [LAST_AUTO_VISIT_AT_KEY]: 0 });
-    if (now - lastAutoVisitAt < AUTO_VISIT_DEBOUNCE_MS) return;
+    if (now - lastAutoVisitAt < AUTO_VISIT_DEBOUNCE_MS) return true;
 
     await setStorage({ [LAST_AUTO_VISIT_AT_KEY]: now });
 
     const didOpenTabs = await visitAllSites(reason);
     if (!didOpenTabs) {
       await setStorage({ [LAST_AUTO_VISIT_AT_KEY]: lastAutoVisitAt });
-      return;
+      return false;
     }
 
     if (shouldCount) {
       await incrementAutoVisitDailyCounter(dailyCounter);
     }
+
+    return true;
   } finally {
     autoVisitInProgress = false;
   }
@@ -239,24 +334,64 @@ async function checkNormalWindowState(reason, force = false) {
 
   await setStorage({ [HAD_NORMAL_WINDOW_KEY]: hasNormalWindow });
 
-  if (!hasNormalWindow) return;
-  if (pendingReason) {
-    await clearPendingAutoVisitReason();
-    await runAutoVisit(pendingReason);
+  if (!hasNormalWindow) {
+    await setSessionAutoVisitStarted(false);
     return;
   }
-  if (force || !hadNormalWindow) {
-    await runAutoVisit(reason);
+
+  if (pendingReason) {
+    const didHandleAutoVisit = await runAutoVisit(pendingReason);
+    if (didHandleAutoVisit) {
+      await clearPendingAutoVisitReason();
+      await setSessionAutoVisitStarted(true);
+    }
+    return;
+  }
+
+  const sessionAutoVisitStarted = await hasSessionAutoVisitStarted();
+  if (force || !sessionAutoVisitStarted || !hadNormalWindow) {
+    const didHandleAutoVisit = await runAutoVisit(reason);
+    if (didHandleAutoVisit) await setSessionAutoVisitStarted(true);
   }
 }
 
 async function handleBrowserStartup() {
+  await setSessionAutoVisitStarted(false);
   await setStorage({
     [HAD_NORMAL_WINDOW_KEY]: false,
     [PENDING_AUTO_VISIT_REASON_KEY]: 'startup',
   });
   schedulePendingAutoVisitRetry();
-  await checkNormalWindowState('startup');
+  await checkNormalWindowState('startup', true);
+}
+
+async function handleNormalWindowCreated() {
+  await setSessionAutoVisitStarted(false);
+  await setPendingAutoVisitReason('first-normal-window');
+  await checkNormalWindowState('first-normal-window', true);
+}
+
+async function handleTabCreated(tab) {
+  if (autoVisitInProgress) return;
+  if (tab?.url && SITES.some(site => tab.url.startsWith(site.url))) return;
+
+  await delay(500);
+  const sessionAutoVisitStarted = await hasSessionAutoVisitStarted();
+  if (sessionAutoVisitStarted) return;
+
+  await setPendingAutoVisitReason('first-tab-created');
+  await checkNormalWindowState('first-tab-created', true);
+}
+
+async function handleNormalWindowRemoved() {
+  await delay(500);
+  const windows = await getNormalWindows();
+  if (windows.length === 0) {
+    await setSessionAutoVisitStarted(false);
+    await setStorage({ [HAD_NORMAL_WINDOW_KEY]: false });
+    return;
+  }
+  await setStorage({ [HAD_NORMAL_WINDOW_KEY]: true });
 }
 
 function captureMTeamHeaders(details) {
@@ -279,31 +414,143 @@ function captureMTeamHeaders(details) {
   return {};
 }
 
-chrome.webRequest.onBeforeSendHeaders.addListener(
+function parseCookieHeader(cookieHeader) {
+  if (!cookieHeader) return [];
+
+  return cookieHeader
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      const separatorIndex = part.indexOf('=');
+      if (separatorIndex < 0) return null;
+      return {
+        name: part.slice(0, separatorIndex).trim(),
+        value: part.slice(separatorIndex + 1),
+      };
+    })
+    .filter(Boolean);
+}
+
+function getTrackedSiteKey(hostname) {
+  const normalizedHost = hostname.toLowerCase();
+  const directMatch = SITE_HOST_TO_KEY[normalizedHost];
+  if (directMatch) return directMatch;
+
+  return Object.keys(SITE_HOST_TO_KEY).find(siteHost =>
+    normalizedHost === siteHost
+    || normalizedHost.endsWith(`.${siteHost}`)
+    || siteHost.endsWith(`.${normalizedHost}`)
+  ) || null;
+}
+
+async function captureSiteCookieHeaders(details) {
+  try {
+    const url = new URL(details.url);
+    const siteKey = getTrackedSiteKey(url.hostname);
+    if (!siteKey) return {};
+
+    const headers = details.requestHeaders || [];
+    const cookieHeader = headers.find(header => header.name.toLowerCase() === 'cookie')?.value || '';
+    const parsedCookies = parseCookieHeader(cookieHeader);
+    if (parsedCookies.length === 0) return {};
+
+    capturedSiteCookies[siteKey] = parsedCookies;
+
+    const { [CAPTURED_SITE_COOKIES_KEY]: storedSiteCookies = {} } = await getStorage({
+      [CAPTURED_SITE_COOKIES_KEY]: {},
+    });
+
+    await setStorage({
+      [CAPTURED_SITE_COOKIES_KEY]: {
+        ...storedSiteCookies,
+        [siteKey]: parsedCookies,
+      },
+    });
+  } catch (error) {}
+  return {};
+}
+
+function addRequestHeadersListener(listener, filter, label) {
+  try {
+    chrome.webRequest.onBeforeSendHeaders.addListener(listener, filter, ['requestHeaders', 'extraHeaders']);
+    return;
+  } catch (error) {
+    console.warn(`[PT Keeper] ${label} extraHeaders listener failed, retrying without extraHeaders: ${error?.message || error}`);
+  }
+
+  try {
+    chrome.webRequest.onBeforeSendHeaders.addListener(listener, filter, ['requestHeaders']);
+  } catch (error) {
+    console.warn(`[PT Keeper] ${label} listener disabled: ${error?.message || error}`);
+  }
+}
+
+const TRACKED_SITE_REQUEST_URLS = [
+  'https://pthome.net/*',
+  'https://*.pthome.net/*',
+  'https://hdarea.club/*',
+  'https://*.hdarea.club/*',
+  'https://pterclub.net/*',
+  'https://*.pterclub.net/*',
+  'https://hdhome.org/*',
+  'https://*.hdhome.org/*',
+  'https://pt.btschool.club/*',
+  'https://btschool.club/*',
+  'https://*.btschool.club/*',
+  'https://hdtime.org/*',
+  'https://*.hdtime.org/*',
+  'https://hddolby.com/*',
+  'https://www.hddolby.com/*',
+  'https://*.hddolby.com/*',
+  'https://skyey2.com/*',
+  'https://www.skyey2.com/*',
+  'https://*.skyey2.com/*',
+  'https://u2.dmhy.org/*',
+  'https://dmhy.org/*',
+  'https://*.dmhy.org/*',
+  'https://kp.m-team.cc/*',
+  'https://*.m-team.cc/*',
+];
+
+addRequestHeadersListener(
   captureMTeamHeaders,
   { urls: [`https://${MTEAM_API_HOST}/*`] },
-  ['requestHeaders']
+  'M-Team header capture'
+);
+
+addRequestHeadersListener(
+  details => {
+    captureSiteCookieHeaders(details);
+    return {};
+  },
+  { urls: TRACKED_SITE_REQUEST_URLS },
+  'site cookie capture'
 );
 
 ensureWindowCheckAlarm();
 
 chrome.runtime.onInstalled.addListener(() => {
   ensureWindowCheckAlarm();
-  checkNormalWindowState('installed', true);
+  runAsync(() => checkNormalWindowState('installed', true), 'installed auto visit');
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureWindowCheckAlarm();
-  handleBrowserStartup();
+  runAsync(handleBrowserStartup, 'startup auto visit');
 });
 
 chrome.windows.onCreated.addListener(window => {
   if (window.type && window.type !== 'normal') return;
-  checkNormalWindowState('first-normal-window');
+  runAsync(handleNormalWindowCreated, 'normal window auto visit');
 });
 
 chrome.windows.onRemoved.addListener(() => {
-  checkNormalWindowState('window-removed');
+  runAsync(handleNormalWindowRemoved, 'window state update');
+});
+
+chrome.tabs.onCreated.addListener(tab => {
+  runAsync(() => handleTabCreated(tab), 'tab-created auto visit');
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
@@ -319,11 +566,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === WINDOW_CHECK_ALARM) {
     ensureWindowCheckAlarm();
-    checkNormalWindowState('window-check');
+    runAsync(() => checkNormalWindowState('window-check'), 'window-check auto visit');
     return;
   }
   if (alarm.name === PENDING_AUTO_VISIT_RETRY_ALARM) {
-    checkNormalWindowState('pending-auto-visit-retry');
+    runAsync(() => checkNormalWindowState('pending-auto-visit-retry'), 'pending auto visit retry');
     return;
   }
   if (alarm.name.startsWith(CLOSE_ALARM_PREFIX)) {
@@ -334,6 +581,20 @@ chrome.alarms.onAlarm.addListener(alarm => {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'GET_CAPTURED_HEADERS') {
     chrome.storage.local.get('mteam_captured', ({ mteam_captured }) => sendResponse(mteam_captured || {}));
+    return true;
+  }
+  if (msg.type === 'GET_CAPTURED_SITE_COOKIES') {
+    chrome.storage.local.get(CAPTURED_SITE_COOKIES_KEY, ({ [CAPTURED_SITE_COOKIES_KEY]: storedSiteCookies }) => {
+      sendResponse({
+        ...capturedSiteCookies,
+        ...(storedSiteCookies || {}),
+      });
+    });
+    return true;
+  }
+  if (msg.type === 'CLEAR_CAPTURED_SITE_COOKIES') {
+    capturedSiteCookies = {};
+    chrome.storage.local.set({ [CAPTURED_SITE_COOKIES_KEY]: {} }, () => sendResponse({ ok: true }));
     return true;
   }
   if (msg.type === 'CLEAR_CAPTURED') {

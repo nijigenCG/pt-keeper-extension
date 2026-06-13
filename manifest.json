@@ -16,16 +16,31 @@
   ],
   "host_permissions": [
     "https://pthome.net/*",
+    "https://*.pthome.net/*",
     "https://hdarea.club/*",
+    "https://*.hdarea.club/*",
     "https://pterclub.net/*",
+    "https://*.pterclub.net/*",
     "https://hdhome.org/*",
+    "https://*.hdhome.org/*",
     "https://pt.btschool.club/*",
+    "https://btschool.club/*",
+    "https://*.btschool.club/*",
     "https://hdtime.org/*",
+    "https://*.hdtime.org/*",
     "https://kp.m-team.cc/*",
+    "https://*.m-team.cc/*",
     "https://api.m-team.io/*",
+    "https://*.m-team.io/*",
+    "https://hddolby.com/*",
     "https://www.hddolby.com/*",
+    "https://*.hddolby.com/*",
+    "https://skyey2.com/*",
     "https://www.skyey2.com/*",
+    "https://*.skyey2.com/*",
     "https://u2.dmhy.org/*"
+    ,"https://dmhy.org/*"
+    ,"https://*.dmhy.org/*"
   ],
   "background": {
     "service_worker": "background.js",

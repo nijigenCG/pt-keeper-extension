@@ -40,7 +40,7 @@
     .site-row.fail .site-status { background: #f44; color: #fff; }
     .site-row.pending .site-status { background: #fa0; color: #000; }
     .site-row.inactive .site-status { background: #555; color: #aaa; }
-    .log { background: #0d0d1a; border-radius: 6px; padding: 10px; margin-top: 12px; max-height: 120px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 11px; color: #888; }
+    .log { background: #0d0d1a; border-radius: 6px; padding: 10px; margin-top: 12px; max-height: 160px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 11px; color: #888; }
     .log-line { margin-bottom: 2px; }
     .log-line.ok { color: #0f8; }
     .log-line.err { color: #f44; }
@@ -56,35 +56,35 @@
 <body>
   <div class="header">
     <h1>PT Keeper</h1>
-    <p>读取和刷新 PT 站点认证信息</p>
+    <p>Read and refresh site credentials</p>
   </div>
   <div class="content">
     <div class="panel">
-      <div class="panel-title">自动触发限制</div>
-      <div class="panel-subtitle">按北京时间统计浏览器自动触发保活的次数。</div>
+      <div class="panel-title">Auto-visit limit</div>
+      <div class="panel-subtitle">Counted by Beijing time for browser-start keepalive triggers.</div>
       <div class="counter-row">
         <div>
           <div class="counter-value" id="autoVisitCounter">0 / 2</div>
-          <div class="counter-meta" id="autoVisitDate">北京时间今天</div>
+          <div class="counter-meta" id="autoVisitDate">Beijing time today</div>
         </div>
       </div>
       <div class="settings-row">
-        <input class="input" id="autoVisitLimitInput" type="number" min="0" step="1" placeholder="每日上限">
-        <button class="btn btn-secondary btn-small" id="btnSaveAutoVisitLimit">保存</button>
+        <input class="input" id="autoVisitLimitInput" type="number" min="0" step="1" placeholder="Daily limit">
+        <button class="btn btn-secondary btn-small" id="btnSaveAutoVisitLimit">Save</button>
       </div>
-      <div class="hint">默认是 2，改成 0 表示关闭浏览器自动触发。</div>
+      <div class="hint">Set to 0 to disable browser-start auto-visit.</div>
     </div>
     <button class="btn btn-primary" id="btnRefresh">
       <span id="btnIcon"></span>
-      <span id="btnText">读取所有站点 Cookie</span>
+      <span id="btnText">Read all site cookies</span>
     </button>
-    <button class="btn btn-visit" id="btnVisit">访问所有站点（保活）</button>
+    <button class="btn btn-visit" id="btnVisit">Visit all sites</button>
     <div class="divider"></div>
     <div class="status" id="statusArea"></div>
     <div class="log" id="logArea" style="display:none"></div>
     <div class="export-section">
-      <button class="btn btn-secondary" id="btnExport">导出 Cookie 文件（JSON）</button>
-      <p class="export-note">导出后可复制到 <code>pt-keeper/config/cookies/</code> 目录使用</p>
+      <button class="btn btn-secondary" id="btnExport">Export cookie JSON</button>
+      <p class="export-note">Exported data stays compatible with the current Docker-side cookie files.</p>
     </div>
   </div>
   <div class="footer">PT Keeper v1.0</div>

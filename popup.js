@@ -38,10 +38,10 @@ function log(msg, type = 'info') {
 function renderStatus(results) {
   statusArea.innerHTML = '';
   const labels = {
-    success: '已保存',
-    fail: '未找到',
-    pending: '读取中',
-    inactive: '未登录',
+    success: 'Ready',
+    fail: 'Error',
+    pending: 'Loading',
+    inactive: 'Not ready',
   };
 
   for (const result of results) {
@@ -53,29 +53,263 @@ function renderStatus(results) {
 }
 
 function buildCookieSiteData(site, cookies) {
+  const allCookies = cookies.map(cookie => ({ name: cookie.name, value: cookie.value }));
+
   if (site.authType === 'cookie') {
-    const found = site.cookieNames
+    const matchedCookies = site.cookieNames
       .map(name => cookies.find(cookie => cookie.name === name))
       .filter(Boolean)
       .map(cookie => ({ name: cookie.name, value: cookie.value }));
-    return found.length > 0 ? { cookies: found } : null;
+
+    if (allCookies.length === 0) return null;
+
+    return {
+      cookies: allCookies,
+      matchedCookieCount: matchedCookies.length,
+      totalCookieCount: allCookies.length,
+    };
   }
 
   if (site.authType === 'single_cookie') {
     const cookie = cookies.find(item => item.name === 'nexusphp_u2')
       || cookies.find(item => item.name.includes('u2_') || item.name.includes('sid'))
       || cookies.find(item => item.name.length > 20);
-    return cookie ? { cookie_name: cookie.name, cookie_value: cookie.value } : null;
+    if (cookie) {
+      return {
+        cookie_name: cookie.name,
+        cookie_value: cookie.value,
+        cookies: allCookies,
+        matchedCookieCount: 1,
+        totalCookieCount: allCookies.length,
+      };
+    }
+    return allCookies.length > 0
+      ? { cookies: allCookies, matchedCookieCount: 0, totalCookieCount: allCookies.length }
+      : null;
   }
 
   if (site.authType === 'skyey2') {
     const found = cookies
       .filter(cookie => cookie.name.startsWith(site.prefix))
       .map(cookie => ({ name: cookie.name.replace(site.prefix, ''), value: cookie.value }));
-    return found.length > 0 ? { cookies: found } : null;
+    if (found.length > 0) {
+      return {
+        cookies: found,
+        matchedCookieCount: found.length,
+        totalCookieCount: allCookies.length,
+      };
+    }
+    return allCookies.length > 0
+      ? { cookies: allCookies, matchedCookieCount: 0, totalCookieCount: allCookies.length }
+      : null;
   }
 
   return null;
+}
+
+function normalizeCookieDomain(domain) {
+  return String(domain || '').replace(/^\./, '').toLowerCase();
+}
+
+function getSiteHosts(site) {
+  const siteHost = new URL(site.url).hostname.toLowerCase();
+  const hostSet = new Set([siteHost]);
+
+  if (site.host) hostSet.add(site.host.toLowerCase());
+
+  if (siteHost.startsWith('www.')) {
+    hostSet.add(siteHost.slice(4));
+  } else {
+    hostSet.add(`www.${siteHost}`);
+  }
+
+  if (siteHost.includes('.')) {
+    const parts = siteHost.split('.');
+    if (parts.length >= 2) {
+      hostSet.add(parts.slice(-2).join('.'));
+    }
+  }
+
+  return [...hostSet];
+}
+
+function getCookiesForSite(allCookies, site) {
+  const siteHosts = getSiteHosts(site);
+  return allCookies.filter(cookie => {
+    const cookieDomain = normalizeCookieDomain(cookie.domain);
+    if (!cookieDomain) return false;
+
+    return siteHosts.some(siteHost =>
+      siteHost === cookieDomain
+      || siteHost.endsWith(`.${cookieDomain}`)
+      || cookieDomain.endsWith(`.${siteHost}`)
+    );
+  });
+}
+
+function parseCookieString(cookieString) {
+  if (!cookieString) return [];
+
+  return cookieString
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      const separatorIndex = part.indexOf('=');
+      if (separatorIndex < 0) return null;
+      return {
+        name: part.slice(0, separatorIndex).trim(),
+        value: part.slice(separatorIndex + 1),
+      };
+    })
+    .filter(Boolean);
+}
+
+function looksLikeAuthStorageKey(key) {
+  const normalizedKey = String(key || '').toLowerCase();
+  return [
+    'token',
+    'auth',
+    'jwt',
+    'session',
+    'cookie',
+    'uid',
+    'user',
+    'pass',
+    'login',
+  ].some(part => normalizedKey.includes(part));
+}
+
+function convertStorageEntriesToCookies(storageEntries = {}) {
+  return Object.entries(storageEntries)
+    .filter(([key, value]) => key && value && looksLikeAuthStorageKey(key))
+    .map(([key, value]) => ({ name: key, value: String(value) }));
+}
+
+function mergeCookies(...cookieGroups) {
+  const merged = [];
+  const seen = new Set();
+
+  for (const group of cookieGroups) {
+    for (const cookie of group || []) {
+      const key = `${cookie.name}\u0000${cookie.value}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(cookie);
+    }
+  }
+
+  return merged;
+}
+
+function getSiteCookieCaptureKey(site) {
+  return new URL(site.url).hostname.toLowerCase();
+}
+
+function buildProbeUrl(site) {
+  const url = new URL(site.url);
+  url.searchParams.set('_ptk_probe', String(Date.now()));
+  return url.toString();
+}
+
+function waitForTabComplete(tabId, timeoutMs = 15000) {
+  return new Promise(resolve => {
+    let settled = false;
+
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(handleUpdated);
+      resolve(result);
+    };
+
+    const handleUpdated = (updatedTabId, changeInfo) => {
+      if (updatedTabId !== tabId) return;
+      if (changeInfo.status === 'complete') finish('complete');
+    };
+
+    const timer = setTimeout(() => finish('timeout'), timeoutMs);
+
+    chrome.tabs.onUpdated.addListener(handleUpdated);
+    chrome.tabs.get(tabId, tab => {
+      if (chrome.runtime.lastError || !tab) {
+        finish('unavailable');
+        return;
+      }
+      if (tab.status === 'complete') finish('complete');
+    });
+  });
+}
+
+async function readCookiesFromPageContext(site) {
+  const tab = await new Promise(resolve => chrome.tabs.create({ url: buildProbeUrl(site), active: false }, resolve));
+  if (!tab?.id) return [];
+
+  try {
+    await waitForTabComplete(tab.id);
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => ({
+        cookieString: document.cookie,
+        localStorageEntries: Object.fromEntries(
+          Array.from({ length: localStorage.length }, (_, index) => {
+            const key = localStorage.key(index);
+            return [key, localStorage.getItem(key)];
+          }).filter(([key]) => key)
+        ),
+        sessionStorageEntries: Object.fromEntries(
+          Array.from({ length: sessionStorage.length }, (_, index) => {
+            const key = sessionStorage.key(index);
+            return [key, sessionStorage.getItem(key)];
+          }).filter(([key]) => key)
+        ),
+      }),
+    });
+
+    const pageResult = result?.result || {};
+    const pageCookies = parseCookieString(pageResult.cookieString || '');
+    if (pageCookies.length > 0) return pageCookies;
+
+    const storageCookies = [
+      ...convertStorageEntriesToCookies(pageResult.localStorageEntries),
+      ...convertStorageEntriesToCookies(pageResult.sessionStorageEntries),
+    ];
+
+    if (storageCookies.length > 0) {
+      log(`${site.name}: using auth-like storage keys as fallback`, 'info');
+    }
+
+    return storageCookies;
+  } catch (error) {
+    log(`${site.name}: page fallback failed (${error.message})`, 'info');
+    return [];
+  } finally {
+    chrome.tabs.remove(tab.id, () => {
+      chrome.runtime.lastError;
+    });
+  }
+}
+
+async function triggerCookieHeaderCapture(site) {
+  await new Promise(resolve => chrome.runtime.sendMessage({ type: 'CLEAR_CAPTURED_SITE_COOKIES' }, resolve));
+
+  const tab = await new Promise(resolve => chrome.tabs.create({ url: buildProbeUrl(site), active: false }, resolve));
+  if (!tab?.id) return [];
+
+  try {
+    await waitForTabComplete(tab.id);
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const capturedSiteCookies = await new Promise(resolve =>
+      chrome.runtime.sendMessage({ type: 'GET_CAPTURED_SITE_COOKIES' }, resolve)
+    );
+
+    return capturedSiteCookies?.[getSiteCookieCaptureKey(site)] || [];
+  } finally {
+    chrome.tabs.remove(tab.id, () => {
+      chrome.runtime.lastError;
+    });
+  }
 }
 
 async function fetchAutoVisitStatus() {
@@ -89,7 +323,7 @@ async function fetchAutoVisitStatus() {
 async function renderAutoVisitStatus() {
   const status = await fetchAutoVisitStatus();
   autoVisitCounter.textContent = `${status.count} / ${status.limit}`;
-  autoVisitDate.textContent = status.date ? `北京时间 ${status.date}` : '北京时间今天';
+  autoVisitDate.textContent = status.date ? `Beijing time ${status.date}` : 'Beijing time today';
   autoVisitLimitInput.value = String(status.limit);
 }
 
@@ -98,7 +332,7 @@ async function saveAutoVisitLimit() {
   const limit = rawValue === '' ? 2 : Number(rawValue);
 
   if (!Number.isFinite(limit) || limit < 0) {
-    log('每日上限必须是大于等于 0 的整数', 'err');
+    log('Daily limit must be an integer greater than or equal to 0', 'err');
     return;
   }
 
@@ -108,11 +342,11 @@ async function saveAutoVisitLimit() {
       chrome.runtime.sendMessage({ type: 'SET_AUTO_VISIT_DAILY_LIMIT', limit }, resolve);
     });
     if (!response?.ok) {
-      log('保存自动触发上限失败', 'err');
+      log('Failed to save daily auto-visit limit', 'err');
       return;
     }
     autoVisitLimitInput.value = String(response.limit);
-    log(`自动触发每日上限已更新为 ${response.limit}`, 'ok');
+    log(`Daily auto-visit limit updated to ${response.limit}`, 'ok');
     await renderAutoVisitStatus();
   } finally {
     btnSaveAutoVisitLimit.disabled = false;
@@ -123,11 +357,14 @@ async function refreshAll() {
   if (isRunning) return;
   isRunning = true;
   btnIcon.innerHTML = '<span class="spinner"></span>';
-  btnText.textContent = '读取中...';
+  btnText.textContent = 'Reading...';
   btnRefresh.disabled = true;
   logArea.style.display = 'block';
   logArea.innerHTML = '';
-  log('开始读取所有站点认证信息...');
+  log('Reading site credentials...');
+
+  const allBrowserCookies = await new Promise(resolve => chrome.cookies.getAll({}, resolve));
+  const { cookies: existingCookies = {} } = await new Promise(resolve => chrome.storage.local.get('cookies', resolve));
 
   const results = [];
   const mteamPlaceholders = SITES
@@ -139,20 +376,51 @@ async function refreshAll() {
     renderStatus([...results.map(item => ({ ...item })), result, ...mteamPlaceholders]);
 
     try {
-      const cookies = await new Promise(resolve => chrome.cookies.getAll({ domain: site.host }, resolve));
+      let cookies = getCookiesForSite(allBrowserCookies, site);
+      if (cookies.length === 0) {
+        log(`${site.name}: no cookies in cookie store, trying request-header capture...`, 'info');
+        cookies = mergeCookies(cookies, await triggerCookieHeaderCapture(site));
+        const refreshedCookies = await new Promise(resolve => chrome.cookies.getAll({}, resolve));
+        cookies = mergeCookies(cookies, getCookiesForSite(refreshedCookies, site));
+      }
+      if (cookies.length === 0) {
+        log(`${site.name}: request-header capture empty, trying page fallback...`, 'info');
+        cookies = mergeCookies(cookies, await readCookiesFromPageContext(site));
+        const refreshedCookies = await new Promise(resolve => chrome.cookies.getAll({}, resolve));
+        cookies = mergeCookies(cookies, getCookiesForSite(refreshedCookies, site));
+      }
+
       const data = buildCookieSiteData(site, cookies);
+
       if (data) {
         result.data = data;
         result.status = 'success';
-        log(`${site.name}: 读取成功 (${cookies.length} cookies)`, 'ok');
+
+        const matched = Number.isFinite(data.matchedCookieCount) ? data.matchedCookieCount : 'n/a';
+        const total = Number.isFinite(data.totalCookieCount) ? data.totalCookieCount : cookies.length;
+        log(`${site.name}: read ${total} cookies, matched ${matched} known cookies`, 'ok');
       } else {
-        result.status = 'fail';
-        const allNames = cookies.map(cookie => cookie.name).join(', ') || '无';
-        log(`${site.name}: 未找到目标 Cookie (当前: ${allNames})`, 'err');
+        const previousData = existingCookies[site.file];
+        if (previousData) {
+          result.data = previousData;
+          result.status = 'success';
+          log(`${site.name}: current read failed, keeping previously saved credentials`, 'info');
+        } else {
+          result.status = 'inactive';
+          const allNames = cookies.map(cookie => cookie.name).join(', ') || 'none';
+          log(`${site.name}: no usable credentials found yet (${allNames})`, 'info');
+        }
       }
     } catch (error) {
-      result.status = 'fail';
-      log(`${site.name}: ${error.message}`, 'err');
+      const previousData = existingCookies[site.file];
+      if (previousData) {
+        result.data = previousData;
+        result.status = 'success';
+        log(`${site.name}: read error, keeping previously saved credentials (${error.message})`, 'info');
+      } else {
+        result.status = 'fail';
+        log(`${site.name}: ${error.message}`, 'err');
+      }
     }
 
     results.push(result);
@@ -161,7 +429,7 @@ async function refreshAll() {
 
   for (const site of SITES.filter(item => item.authType === 'mteam_api')) {
     const result = { name: site.name, file: site.file, status: 'pending' };
-    log(`${site.name}: 检查已捕获的认证头...`);
+    log(`${site.name}: checking captured auth headers...`);
     const captured = await new Promise(resolve => chrome.runtime.sendMessage({ type: 'GET_CAPTURED_HEADERS' }, resolve));
 
     if (captured?.authorization?.startsWith('Bearer ')) {
@@ -173,11 +441,18 @@ async function refreshAll() {
         webversion: captured.webversion || '1140',
       };
       result.status = 'success';
-      log(`${site.name}: 已获取到 Token`, 'ok');
+      log(`${site.name}: captured token`, 'ok');
     } else {
-      result.status = 'fail';
-      log(`${site.name}: 还没有捕获到 Token`, 'info');
-      log(`${site.name}: 请先打开 M-Team 页面并触发 /api/member/profile 请求`, 'info');
+      const previousData = existingCookies[site.file];
+      if (previousData) {
+        result.data = previousData;
+        result.status = 'success';
+        log(`${site.name}: token not captured this time, keeping previously saved credentials`, 'info');
+      } else {
+        result.status = 'inactive';
+        log(`${site.name}: token not captured yet`, 'info');
+        log(`${site.name}: open M-Team and trigger /api/member/profile first`, 'info');
+      }
     }
 
     results.push(result);
@@ -186,26 +461,41 @@ async function refreshAll() {
 
   const saved = {};
   for (const result of results) {
-    if (result.data) saved[result.file] = result.data;
+    if (!result.data) continue;
+
+    if (result.data.cookie_name && result.data.cookie_value) {
+      saved[result.file] = {
+        cookie_name: result.data.cookie_name,
+        cookie_value: result.data.cookie_value,
+      };
+      continue;
+    }
+
+    if (result.data.cookies) {
+      saved[result.file] = { cookies: result.data.cookies };
+      continue;
+    }
+
+    saved[result.file] = result.data;
   }
 
   await new Promise(resolve => chrome.storage.local.set({ cookies: saved }, resolve));
-  log(`已保存 ${Object.keys(saved).length} 个站点的认证信息`, 'ok');
-  log('点击“导出 Cookie 文件（JSON）”即可下载', 'info');
+  log(`Saved credentials for ${Object.keys(saved).length} sites`, 'ok');
+  log('Use Export Cookie JSON to download the result', 'info');
 
   isRunning = false;
   btnIcon.innerHTML = '';
-  btnText.textContent = '读取所有站点 Cookie';
+  btnText.textContent = 'Read all site cookies';
   btnRefresh.disabled = false;
 }
 
 async function visitAll() {
   logArea.style.display = 'block';
   logArea.innerHTML = '';
-  log('正在访问所有站点，标签页会在 3 秒后自动关闭...');
+  log('Opening all sites, tabs will close after 3 seconds...');
 
   await Promise.all(SITES.map(site => new Promise(resolve => {
-    log(`${site.name}: 访问 ${site.url}`, 'info');
+    log(`${site.name}: visit ${site.url}`, 'info');
     chrome.tabs.create({ url: site.url, active: false }, tab => {
       setTimeout(() => {
         try {
@@ -216,13 +506,13 @@ async function visitAll() {
     });
   })));
 
-  log('全部访问完成', 'ok');
+  log('Finished visiting all sites', 'ok');
 }
 
 async function exportJson() {
   const { cookies } = await new Promise(resolve => chrome.storage.local.get('cookies', resolve));
   if (!cookies || Object.keys(cookies).length === 0) {
-    alert('还没有读取过 Cookie，请先点击“读取所有站点 Cookie”');
+    alert('No cookies have been read yet. Click Read all site cookies first.');
     return;
   }
 
@@ -234,7 +524,7 @@ async function exportJson() {
   const blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   chrome.downloads.download({ url, filename: 'pt-cookies-all.json', saveAs: true });
-  log('已下载 pt-cookies-all.json', 'ok');
+  log('Downloaded pt-cookies-all.json', 'ok');
 }
 
 async function init() {
