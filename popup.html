@@ -9,12 +9,23 @@
     .header h1 { font-size: 18px; color: #e94560; }
     .header p { font-size: 12px; color: #888; margin-top: 4px; }
     .content { padding: 12px; }
+    .panel { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    .panel-title { font-size: 13px; font-weight: 600; color: #eee; }
+    .panel-subtitle { margin-top: 4px; font-size: 11px; color: #7f8aa3; line-height: 1.4; }
+    .counter-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 10px; }
+    .counter-value { font-size: 22px; font-weight: 700; color: #e94560; }
+    .counter-meta { font-size: 11px; color: #7f8aa3; }
+    .settings-row { display: flex; gap: 8px; margin-top: 10px; }
+    .input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid #0f3460; border-radius: 8px; background: #0d0d1a; color: #eee; font-size: 13px; }
+    .input:focus { outline: none; border-color: #e94560; }
+    .hint { margin-top: 8px; font-size: 11px; color: #7f8aa3; }
     .btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
     .btn-primary { background: #e94560; color: #fff; }
     .btn-primary:hover { background: #c73650; }
     .btn-primary:disabled { background: #555; cursor: not-allowed; }
     .btn-secondary { background: #0f3460; color: #eee; margin-top: 8px; }
     .btn-secondary:hover { background: #1a4a80; }
+    .btn-small { width: auto; margin-top: 0; padding: 10px 14px; font-size: 13px; }
     .btn-visit { background: #16213e; color: #0f8; font-size: 13px; padding: 10px; margin-top: 8px; }
     .btn-visit:hover { background: #1e3050; }
     .status { margin: 12px 0; }
@@ -45,9 +56,24 @@
 <body>
   <div class="header">
     <h1>PT Keeper</h1>
-    <p>一键读取 / 刷新 PT 站点认证信息</p>
+    <p>读取和刷新 PT 站点认证信息</p>
   </div>
   <div class="content">
+    <div class="panel">
+      <div class="panel-title">自动触发限制</div>
+      <div class="panel-subtitle">按北京时间统计浏览器自动触发保活的次数。</div>
+      <div class="counter-row">
+        <div>
+          <div class="counter-value" id="autoVisitCounter">0 / 2</div>
+          <div class="counter-meta" id="autoVisitDate">北京时间今天</div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <input class="input" id="autoVisitLimitInput" type="number" min="0" step="1" placeholder="每日上限">
+        <button class="btn btn-secondary btn-small" id="btnSaveAutoVisitLimit">保存</button>
+      </div>
+      <div class="hint">默认是 2，改成 0 表示关闭浏览器自动触发。</div>
+    </div>
     <button class="btn btn-primary" id="btnRefresh">
       <span id="btnIcon"></span>
       <span id="btnText">读取所有站点 Cookie</span>
@@ -57,7 +83,7 @@
     <div class="status" id="statusArea"></div>
     <div class="log" id="logArea" style="display:none"></div>
     <div class="export-section">
-      <button class="btn btn-secondary" id="btnExport">导出 Cookie 文件 (JSON)</button>
+      <button class="btn btn-secondary" id="btnExport">导出 Cookie 文件（JSON）</button>
       <p class="export-note">导出后可复制到 <code>pt-keeper/config/cookies/</code> 目录使用</p>
     </div>
   </div>
